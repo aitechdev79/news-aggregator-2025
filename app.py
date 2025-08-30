@@ -11,9 +11,13 @@ from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 
 # Load API keys
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+#load_dotenv()
+#OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+#SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+
+import streamlit as st
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
 
 # Page config
 st.set_page_config(page_title="News Aggregation Assistant (SerpAPI)", page_icon="📰", layout="wide")
