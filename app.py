@@ -11,7 +11,6 @@ from pypdf import PdfReader
 from bs4 import BeautifulSoup
 import trafilatura
 from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
 
 # Load API keys
 #load_dotenv()
@@ -123,9 +122,7 @@ def filter_by_date(articles, days):
     return fresh, old
 
 # === PROMPTS ===
-detailed_prompt = PromptTemplate(
-    input_variables=["title", "snippet", "url"],
-    template='''
+DETAILED_SUMMARY_TEMPLATE = """
 You are a professional news summarizer.
 
 Task: Provide a more thorough summary of the news article.
@@ -136,11 +133,10 @@ Article:
 - URL: {url}
 
 Requirements:
-- Write 3 coherent paragraphs (each 3–5 sentences).
+- Write 3 coherent paragraphs (each 3-5 sentences).
 - Use a neutral, factual, professional tone.
-- At the end, include: 🔗 [Read full article]({url})
-'''
-)
+- At the end, include: [Read full article]({url})
+"""
 
 # === HIGHLIGHT FUNCTION SAFE ===
 def highlight_text_safe(text, keywords, style="bold"):
@@ -168,7 +164,7 @@ def get_detailed_summary(article, keywords, style="bold"):
     if key in st.session_state:
         return st.session_state[key]
     else:
-        detailed = detailed_prompt.format(
+        detailed = DETAILED_SUMMARY_TEMPLATE.format(
             title=article["title"],
             snippet=article["content"],
             url=article["url"]
@@ -348,3 +344,4 @@ if generate_button:
 
         except Exception as e:
             st.error(f"Error: {str(e)}")
+
