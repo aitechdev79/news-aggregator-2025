@@ -177,6 +177,7 @@ def get_detailed_summary(article, keywords, style="bold"):
 # === CONTENT EXTRACTION + GENERIC SUMMARY ===
 def extract_text_from_pdf(file):
     try:
+        file.seek(0)
         reader = PdfReader(file)
         pages = [(page.extract_text() or "").strip() for page in reader.pages]
         return "\n\n".join([p for p in pages if p])
@@ -206,7 +207,37 @@ def extract_text_from_url(url):
         st.error(f"Failed to extract website text: {e}")
         return ""
 
-def summarize_text(text, style="professional", max_len=6000, keywords=None, highlight_style="bold"):
+def extract_title_from_pdf(file):
+    try:
+        file.seek(0)
+        reader = PdfReader(file)
+        meta_title = (reader.metadata.get("/Title") if reader.metadata else "") or ""
+        if meta_title.strip():
+            return meta_title.strip()
+    except Exception:
+        pass
+    return file.name
+
+def extract_title_from_url(url):
+    try:
+        downloaded = trafilatura.fetch_url(url)
+        metadata = trafilatura.extract_metadata(downloaded) if downloaded else None
+        if metadata and metadata.title:
+            return metadata.title.strip()
+    except Exception:
+        pass
+
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        if soup.title and soup.title.text.strip():
+            return soup.title.text.strip()
+    except Exception:
+        pass
+    return url
+
+def summarize_text(text, style="professional", max_len=6000):
     if not text or not text.strip():
         return "No content to summarize."
 
@@ -224,66 +255,96 @@ Content:
 {clipped_text}
 """
     resp = llm.invoke(prompt)
-    return highlight_text_safe(resp.content, keywords or [], highlight_style)
+    return resp.content.strip()
+
+def build_source_summary(title, text, keywords=None, highlight_style="bold"):
+    short_prompt = (
+        "vi | Trả lời đúng 1 câu duy nhất, tóm tắt cốt lõi của tài liệu. "
+        "Không thêm giải thích ngoài câu tóm tắt."
+    )
+    long_prompt = (
+        "vi | Viết nội dung tóm tắt chi tiết khoảng 1 trang A4 "
+        "(xấp xỉ 450-650 từ), mạch lạc, trung tính, có cấu trúc đoạn rõ ràng."
+    )
+    short_desc = summarize_text(text, style=short_prompt, max_len=8000)
+    long_content = summarize_text(text, style=long_prompt, max_len=20000)
+
+    short_desc = highlight_text_safe(short_desc, keywords or [], highlight_style)
+    long_content = highlight_text_safe(long_content, keywords or [], highlight_style)
+
+    return (
+        f"**Tiêu đề:** {title}\n\n"
+        f"**Mô tả ngắn:** {short_desc}\n\n"
+        f"**Nội dung:**\n{long_content}"
+    )
 
 # === SIDEBAR ===
 with st.sidebar:
     st.header("Configure Your News Feed")
-    timeframe_options = ["the last 24 hours","the last 3 days","the last 7 days","the last 14 days","the last 30 days"]
-    timeframe = st.selectbox("Time Frame", timeframe_options, index=2)
-    default_topic = "sustainable agriculture"
-    topic = st.text_input("Topic", value=default_topic)
-    geo_options = ["Vietnam, ASEAN, and Global","Vietnam only","ASEAN only","Global only"]
-    geo_scope = st.selectbox("Geographical Scope", geo_options, index=0)
-    search_engine = st.selectbox("Search Engine", ["google_news", "google", "bing_news"], index=0)
-    language = st.selectbox("Language", ["en","vi","fr","ja","zh"], index=1)
-    summary_sentences = st.slider("Number of sentences per summary", 2, 8, 4, 1)
-    max_results = st.selectbox("Number of search results", [10, 20, 30, 50], index=0)
-    max_articles = st.slider("Max articles in report", 5, 20, 10, 1)
-    highlight_keywords = st.text_input("Highlight keywords (comma-separated)", value="Vietnam, Climate, Agriculture")
-    highlight_style = st.radio("Highlight Style", ["bold","highlight"], index=0)
-    summary_style = st.selectbox("Summary Style", ["professional", "bullet", "executive"], index=0)
-    summary_max_len = st.slider("Summary max input chars", 1000, 20000, 6000, 500)
-    uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"])
-    website_url = st.text_input("Website URL")
-    enable_fallback = st.checkbox("Enable Fallback Mode", value=True)
-    fallback_days = None
-    if enable_fallback:
-        fallback_days = st.slider("Fallback lookback (days)", 30, 365, 90, 30)
-    summarize_source_button = st.button("Summarize Uploaded Source")
-    generate_button = st.button("Generate News Report", type="primary")
+    news_tab, source_tab = st.tabs(["News Feed", "Source Summary"])
+
+    with news_tab:
+        timeframe_options = ["the last 24 hours","the last 3 days","the last 7 days","the last 14 days","the last 30 days"]
+        timeframe = st.selectbox("Time Frame", timeframe_options, index=2)
+        default_topic = "sustainable agriculture"
+        topic = st.text_input("Topic", value=default_topic)
+        geo_options = ["Vietnam, ASEAN, and Global","Vietnam only","ASEAN only","Global only"]
+        geo_scope = st.selectbox("Geographical Scope", geo_options, index=0)
+        search_engine = st.selectbox("Search Engine", ["google_news", "google", "bing_news"], index=0)
+        language = st.selectbox("Language", ["en","vi","fr","ja","zh"], index=1)
+        summary_sentences = st.slider("Number of sentences per summary", 2, 8, 4, 1)
+        max_results = st.selectbox("Number of search results", [10, 20, 30, 50], index=0)
+        max_articles = st.slider("Max articles in report", 5, 20, 10, 1)
+        highlight_keywords = st.text_input("Highlight keywords (comma-separated)", value="Vietnam, Climate, Agriculture")
+        highlight_style = st.radio("Highlight Style", ["bold","highlight"], index=0)
+        enable_fallback = st.checkbox("Enable Fallback Mode", value=True)
+        fallback_days = None
+        if enable_fallback:
+            fallback_days = st.slider("Fallback lookback (days)", 30, 365, 90, 30)
+        generate_button = st.button("Generate News Report", type="primary")
+
+    with source_tab:
+        uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"])
+        website_url = st.text_input("Website URL")
+        summarize_source_button = st.button("Summarize Uploaded Source")
 
 # === MAIN ===
 if summarize_source_button:
     st.header("Source Summary")
     keywords = [k.strip() for k in highlight_keywords.split(",")]
-    source_text_blocks = []
+    has_pdf = uploaded_pdf is not None
+    has_url = bool(website_url.strip())
 
-    if uploaded_pdf is not None:
-        pdf_text = extract_text_from_pdf(uploaded_pdf)
-        if pdf_text:
-            source_text_blocks.append(pdf_text)
-
-    if website_url.strip():
-        url_text = extract_text_from_url(website_url.strip())
-        if url_text:
-            source_text_blocks.append(url_text)
-
-    if source_text_blocks:
-        combined_source_text = "\n\n".join(source_text_blocks)
-        source_summary = summarize_text(
-            combined_source_text,
-            style=summary_style,
-            max_len=summary_max_len,
-            keywords=keywords,
-            highlight_style=highlight_style
-        )
-        if highlight_style == "highlight":
-            st.markdown(source_summary, unsafe_allow_html=True)
-        else:
-            st.markdown(source_summary)
+    if has_pdf and has_url:
+        st.warning("Chỉ chọn một nguồn mỗi lần: hoặc PDF hoặc URL.")
+    elif not has_pdf and not has_url:
+        st.warning("Vui lòng upload PDF hoặc nhập URL để tóm tắt.")
     else:
-        st.warning("Please upload a PDF or enter a website URL to summarize.")
+        if has_pdf:
+            source_title = extract_title_from_pdf(uploaded_pdf)
+            source_text = extract_text_from_pdf(uploaded_pdf)
+        else:
+            cleaned_url = website_url.strip()
+            source_title = extract_title_from_url(cleaned_url)
+            source_text = extract_text_from_url(cleaned_url)
+
+        if source_text.strip():
+            source_summary = build_source_summary(
+                source_title,
+                source_text,
+                keywords=keywords,
+                highlight_style=highlight_style
+            )
+        else:
+            source_summary = ""
+
+        if source_summary:
+            if highlight_style == "highlight":
+                st.markdown(source_summary, unsafe_allow_html=True)
+            else:
+                st.markdown(source_summary)
+        else:
+            st.warning("Không trích xuất được nội dung từ nguồn đã chọn.")
 
 if generate_button:
     st.header(f"Top News on {topic}")
