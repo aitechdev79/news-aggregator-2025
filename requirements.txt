@@ -7,3 +7,6 @@ pandas
 openpyxl
 python-dateutil
 python-dotenv
+pypdf
+trafilatura
+beautifulsoup4

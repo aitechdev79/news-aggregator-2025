@@ -7,6 +7,9 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 from io import BytesIO
 from dateutil import parser
+from pypdf import PdfReader
+from bs4 import BeautifulSoup
+import trafilatura
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 
@@ -175,6 +178,58 @@ def get_detailed_summary(article, keywords, style="bold"):
         st.session_state[key] = text
         return text
 
+# === CONTENT EXTRACTION + GENERIC SUMMARY ===
+def extract_text_from_pdf(file):
+    try:
+        reader = PdfReader(file)
+        pages = [(page.extract_text() or "").strip() for page in reader.pages]
+        return "\n\n".join([p for p in pages if p])
+    except Exception as e:
+        st.error(f"Failed to read PDF: {e}")
+        return ""
+
+def extract_text_from_url(url):
+    try:
+        downloaded = trafilatura.fetch_url(url)
+        extracted = trafilatura.extract(downloaded) if downloaded else None
+        if extracted and extracted.strip():
+            return extracted.strip()
+    except Exception:
+        pass
+
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "noscript"]):
+            tag.decompose()
+        paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
+        text = "\n\n".join([p for p in paragraphs if p])
+        return text
+    except Exception as e:
+        st.error(f"Failed to extract website text: {e}")
+        return ""
+
+def summarize_text(text, style="professional", max_len=6000, keywords=None, highlight_style="bold"):
+    if not text or not text.strip():
+        return "No content to summarize."
+
+    clipped_text = text[:max_len]
+    prompt = f"""
+You are a professional summarizer.
+
+Style: {style}
+Task:
+- Summarize the content below in a neutral, factual tone.
+- Focus on key points, outcomes, and notable numbers if present.
+- Keep it concise and readable.
+
+Content:
+{clipped_text}
+"""
+    resp = llm.invoke(prompt)
+    return highlight_text_safe(resp.content, keywords or [], highlight_style)
+
 # === SIDEBAR ===
 with st.sidebar:
     st.header("Configure Your News Feed")
@@ -191,19 +246,56 @@ with st.sidebar:
     max_articles = st.slider("Max articles in report", 5, 20, 10, 1)
     highlight_keywords = st.text_input("Highlight keywords (comma-separated)", value="Vietnam, Climate, Agriculture")
     highlight_style = st.radio("Highlight Style", ["bold","highlight"], index=0)
+    summary_style = st.selectbox("Summary Style", ["professional", "bullet", "executive"], index=0)
+    summary_max_len = st.slider("Summary max input chars", 1000, 20000, 6000, 500)
+    uploaded_pdf = st.file_uploader("Upload PDF", type=["pdf"])
+    website_url = st.text_input("Website URL")
     enable_fallback = st.checkbox("Enable Fallback Mode", value=True)
     fallback_days = None
     if enable_fallback:
         fallback_days = st.slider("Fallback lookback (days)", 30, 365, 90, 30)
+    summarize_source_button = st.button("Summarize Uploaded Source")
     generate_button = st.button("Generate News Report", type="primary")
 
 # === MAIN ===
+if summarize_source_button:
+    st.header("Source Summary")
+    keywords = [k.strip() for k in highlight_keywords.split(",")]
+    source_text_blocks = []
+
+    if uploaded_pdf is not None:
+        pdf_text = extract_text_from_pdf(uploaded_pdf)
+        if pdf_text:
+            source_text_blocks.append(pdf_text)
+
+    if website_url.strip():
+        url_text = extract_text_from_url(website_url.strip())
+        if url_text:
+            source_text_blocks.append(url_text)
+
+    if source_text_blocks:
+        combined_source_text = "\n\n".join(source_text_blocks)
+        source_summary = summarize_text(
+            combined_source_text,
+            style=summary_style,
+            max_len=summary_max_len,
+            keywords=keywords,
+            highlight_style=highlight_style
+        )
+        if highlight_style == "highlight":
+            st.markdown(source_summary, unsafe_allow_html=True)
+        else:
+            st.markdown(source_summary)
+    else:
+        st.warning("Please upload a PDF or enter a website URL to summarize.")
+
 if generate_button:
     st.header(f"Top News on {topic}")
     st.caption(f"Time frame: {timeframe} | Engine: {search_engine} | Language: {language}")
 
     with st.spinner("Searching and compiling news..."):
         try:
+            old_articles = []
             query = f"{topic} {geo_scope} news"
             articles = serpapi_search(query, engine=search_engine, lang=language, max_results=max_results)
             days_filter = {"the last 24 hours":1,"the last 3 days":3,"the last 7 days":7,"the last 14 days":14,"the last 30 days":30}.get(timeframe,0)
